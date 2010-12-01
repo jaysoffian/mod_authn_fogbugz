@@ -1,0 +1,20 @@
+mod_authn_fogbugz is a copy of the Apache mod_authn_dbd.c module which
+has been modified to authenticate against the FogBugz MySQL "Person"
+table. It has only been tested on Linux with FogBugz "Person" table
+entries using sPasswordVersion 600.
+
+To configure it for use with Apache, use something like:
+
+<Location "/login/">
+  AuthType Basic
+  AuthName "Login"
+  Require valid-user
+  AuthBasicProvider fogbugz
+  AuthFogBugzUserPWQuery "SELECT sPassword from Person WHERE binary sEmail = %s"
+</Location>
+
+LoadModule authn_fogbugz_module /path/to/modules/mod_authn_fogbugz.so
+LoadModule dbd_module /path/to/modules/mod_dbd.so
+DBDriver mysql
+DBDPersist off
+DBDParams "host=localhost port=3306 user=fogbugz pass=XXXXXXXX dbname=fogbugz"
