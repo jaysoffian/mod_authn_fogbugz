@@ -30,7 +30,6 @@ module AP_MODULE_DECLARE_DATA authn_fogbugz_module;
 
 typedef struct {
     const char *user;
-    const char *realm;
 } authn_fogbugz_conf;
 
 /* optional function - look it up once in post_config */
@@ -48,7 +47,6 @@ static void *authn_fogbugz_merge_conf(apr_pool_t *pool, void *BASE, void *ADD)
     authn_fogbugz_conf *base = BASE;
     authn_fogbugz_conf *ret = apr_palloc(pool, sizeof(authn_fogbugz_conf));
     ret->user = (add->user == NULL) ? base->user : add->user;
-    ret->realm = (add->realm == NULL) ? base->realm : add->realm;
     return ret;
 }
 static const char *authn_fogbugz_prepare(cmd_parms *cmd, void *cfg, const char *query)
@@ -75,9 +73,6 @@ static const command_rec authn_fogbugz_cmds[] =
     AP_INIT_TAKE1("AuthFogBugzUserPWQuery", authn_fogbugz_prepare,
                   (void *) APR_OFFSETOF(authn_fogbugz_conf, user), ACCESS_CONF,
                   "Query used to fetch password for user"),
-    AP_INIT_TAKE1("AuthFogBugzUserRealmQuery", authn_fogbugz_prepare,
-                  (void *) APR_OFFSETOF(authn_fogbugz_conf, realm), ACCESS_CONF,
-                  "Query used to fetch password for user+realm"),
     {NULL}
 };
 static apr_status_t validate_password(request_rec* r, const char* password,
@@ -187,99 +182,16 @@ static authn_status authn_fogbugz_password(request_rec *r, const char *user,
 
     return AUTH_GRANTED;
 }
-static authn_status authn_fogbugz_realm(request_rec *r, const char *user,
-                                    const char *realm, char **rethash)
-{
-    apr_status_t rv;
-    const char *dbd_hash = NULL;
-    apr_dbd_prepared_t *statement;
-    apr_dbd_results_t *res = NULL;
-    apr_dbd_row_t *row = NULL;
 
-    authn_fogbugz_conf *conf = ap_get_module_config(r->per_dir_config,
-                                                    &authn_fogbugz_module);
-    ap_dbd_t *dbd = authn_fogbugz_acquire_fn(r);
-    if (dbd == NULL) {
-        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
-                      "Failed to acquire database connection to look up "
-                      "user '%s:%s'", user, realm);
-        return AUTH_GENERAL_ERROR;
-    }
-    if (conf->realm == NULL) {
-        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
-                      "No AuthFogBugzUserRealmQuery has been specified");
-        return AUTH_GENERAL_ERROR;
-    }
-    statement = apr_hash_get(dbd->prepared, conf->realm, APR_HASH_KEY_STRING);
-    if (statement == NULL) {
-        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
-                      "A prepared statement could not be found for "
-                      "AuthFogBugzUserRealmQuery with the key '%s'", conf->realm);
-    }
-    if (apr_dbd_pvselect(dbd->driver, r->pool, dbd->handle, &res, statement,
-                              0, user, realm, NULL) != 0) {
-        ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,
-                      "Query execution error looking up '%s:%s' "
-                      "in database", user, realm);
-        return AUTH_GENERAL_ERROR;
-    }
-    for (rv = apr_dbd_get_row(dbd->driver, r->pool, res, &row, -1);
-         rv != -1;
-         rv = apr_dbd_get_row(dbd->driver, r->pool, res, &row, -1)) {
-        if (rv != 0) {
-            ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r,
-                          "Error retrieving results while looking up '%s:%s' "
-                          "in database", user, realm);
-            return AUTH_GENERAL_ERROR;
-        }
-        if (dbd_hash == NULL) {
-#if APU_MAJOR_VERSION > 1 || (APU_MAJOR_VERSION == 1 && APU_MINOR_VERSION >= 3)
-            /* add the rest of the columns to the environment */
-            int i = 1;
-            const char *name;
-            for (name = apr_dbd_get_name(dbd->driver, res, i);
-                 name != NULL;
-                 name = apr_dbd_get_name(dbd->driver, res, i)) {
-
-                char *str = apr_pstrcat(r->pool, AUTHN_PREFIX,
-                                        name,
-                                        NULL);
-                int j = sizeof(AUTHN_PREFIX)-1; /* string length of "AUTHENTICATE_", excluding the trailing NIL */
-                while (str[j]) {
-                    if (!apr_isalnum(str[j])) {
-                        str[j] = '_';
-                    }
-                    else {
-                        str[j] = apr_toupper(str[j]);
-                    }
-                    j++;
-                }
-                apr_table_set(r->subprocess_env, str,
-                              apr_dbd_get_entry(dbd->driver, row, i));
-                i++;
-            }
-#endif
-            dbd_hash = apr_dbd_get_entry(dbd->driver, row, 0);
-        }
-        /* we can't break out here or row won't get cleaned up */
-    }
-
-    if (!dbd_hash) {
-        return AUTH_USER_NOT_FOUND;
-    }
-
-    *rethash = apr_pstrdup(r->pool, dbd_hash);
-    return AUTH_USER_FOUND;
-}
 static void authn_fogbugz_register_hooks(apr_pool_t *p)
 {
     static const authn_provider authn_fogbugz_provider = {
         &authn_fogbugz_password,
-        &authn_fogbugz_realm
+        NULL
     };
-
     ap_register_provider(p, AUTHN_PROVIDER_GROUP, "fogbugz", "0", &authn_fogbugz_provider);
 }
+
 module AP_MODULE_DECLARE_DATA authn_fogbugz_module =
 {
     STANDARD20_MODULE_STUFF,
